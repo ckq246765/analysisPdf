@@ -4,6 +4,7 @@ import re
 import json
 from bs4 import BeautifulSoup
 from decimal import Decimal
+from util_base.util import util
 
 
 class ProcessHtml:
@@ -24,8 +25,12 @@ class ProcessHtml:
         self.style_content = ''.join(content)
 
     @staticmethod
-    def exclude_elem(elem, index):
+    def exclude_elem(elem, index, _class):
         in_text = re.sub(' ', '', elem.text)
+        for cls in _class:
+            if re.search('^(ls)', cls):
+                return True
+
         if index == 1 and re.search('公告编号', in_text):
             return True
         if (index == 0 and elem.name == 'img') or elem.name == 'a':  # img标签和a标签不解析
@@ -148,15 +153,75 @@ class ProcessHtml:
                 if len(row) == max_len:
                     n -= 1
                     continue
-                self.insert_col(standard_row, row, n)
-
-                # self.process_cell(row, standard_row)  # 对列做合并 补全处理
+                self.process_table(standard_row, row, n)
                 n -= 1
 
     @staticmethod
-    def compare_cols_val(c_col, col):
-        prop= ['w', 'h', 'x', 'y']
-        pass
+    def check_col_pos(col, s_col):
+        return bool(col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x'])
+
+    def insert_row_col(self, s_col, row, row_index, s_col_index, type):
+        """
+        对当前的列进行补充
+        @param s_col: 标准行的当前行
+        @param row: 当前行
+        @param row_index: 当前行的索引
+        @param s_col_index: 标准行当前列的索引
+        @return:
+        """
+        n = row_index - 1
+        if_break = False
+        while n > -1:
+            cols = self.rows[n]
+            for col in cols:
+                if col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x']:
+                    if type == 'insert':
+                        row.insert(s_col_index, col)
+                        if_break = True
+                        break
+
+                    if type == 'append':
+                        if_break = True
+                        row.append(col)
+                        break
+            if if_break:
+                break
+            n -= 1
+
+    def process_table(self, standard_row, row, row_index):
+        """
+        @param standard_row: 标准行
+        @param row: 当前行
+        @param row_index: 行前行索引
+        @return:
+        """
+        # def recursion():
+        #
+        #
+        #
+        #     if len(row) != len(standard_row):
+        #         pass
+        #     pass
+        #
+        # recursion()
+
+        for s_index, s_row in enumerate(standard_row):
+            if s_index > len(row) - 1:
+                self.insert_row_col(s_row, row, row_index, s_index, 'append')
+                continue
+
+            if self.check_col_pos(s_row, row[s_index]):
+                continue
+
+            if not self.check_col_pos(s_row, row[s_index]):
+                ''' 如果当前行的x的列的x值大于标准行对应列的x值，则应该在当前行的列之前补充一列 '''
+                pos, s_pos = row[s_index]['pos'], s_row['pos']
+
+                if s_pos['x'] < pos['x']:
+                    self.insert_row_col(s_row, row, row_index, s_index, 'insert')
+
+                if s_pos['x'] == pos['x'] and pos['w'] > s_pos['w']:
+                    self.set_col_pos_text(row, pos, standard_row, s_index, row[s_index])
 
     def delete_merge_col(self, current_row, row_index):
         """
@@ -180,119 +245,37 @@ class ProcessHtml:
             self.rows.pop(row_index)
         return is_del
 
-    def recursion_inset(self, standard_row, col_index, row, s_pos, row_index):
-        """
-        @param col_index: 标准列的列索引
-        @param row: 当前行
-        @param s_pos: 标准行的位置
-        @param row_index: 行索引
-        @param standard_row: 标准行
-        @return:
-        """
-        insert_col = self.get_insert_col(s_pos, row_index)
-        if insert_col:
-            row.insert(col_index, insert_col)
-            if len(row) != len(standard_row):
-                self.recursion_inset()
-
-
-
-
-    def insert_col(self, standard_row, row, row_index):
-        """
-        @param standard_row: 标准行
-        @param row: 当前行
-        @param row_index: 行索引
-        @return:
-        """
-        if self.delete_merge_col(row, row_index):
-            return False
-
-        for index, col in enumerate(standard_row):
-            s_pos = col['pos']
-            _bool_merge = False
-            if index > len(row) - 1:
-                _bool_merge = True
-            else:
-                pos = row[index]['pos']
-            if pos['x'] > s_pos['x'] or _bool_merge:
-                # self.recursion_inset(standard_row, row, s_pos, row_index)
-                insert_col = self.get_insert_col(s_pos, row_index)
-                if insert_col:
-                    row.insert(index, insert_col)
-            if pos['x'] == s_pos['x'] and pos['w'] > s_pos['w']:
-                # 有合并的单元格，这种情况下，需要去拆分单元格
-                self.process_cell(row, standard_row, index + 1)
-
-
-        # if len(row) != len(standard_row):
-            # self.process_cell(row, standard_row, index + 1)
-
-    def get_insert_col(self, s_pos, row_index):
-        """
-        @param s_pos: 标准列样式
-        @param row_index: 行索引
-        @return:
-        """
-        is_break = False
-        insert_col = {}
-        while row_index > -1:
-            row = self.rows[row_index]
-            for col in row:
-                pos = col['pos']
-                if pos['x'] == s_pos['x'] and pos['w'] == s_pos['w']:
-                    insert_col = col
-                    is_break = True
-                    break
-            if is_break:
-                break
-            row_index -= 1
-        return insert_col
-
-    def process_cell(self, row, standard_row, index):
-        """
-        @param row: 当前行
-        @param standard_row: 标准当前行
-        @param index: 列索引
-        @return:
-        """
-        while index < len(standard_row):
-            if index > len(row) - 1:
-                ''' 当标准行的下标大于当前行的长度的时候，要去补全缺失的列 '''
-                self.set_col_pos_text(row, col_pos, standard_row, index, col)
-                index += 1
-                continue
-            col = row[index]
-            col_pos = col['pos']
-            standard_col_pos = standard_row[index]['pos']
-            if col_pos['x'] == standard_col_pos['x'] and col_pos['w'] != standard_col_pos['w']:
-                ''' demerge_cols：要对当前列拆分多少次，每次的pos '''
-                self.set_col_pos_text(row, col_pos, standard_row, index, col)
-                # demerge_cols = self.demerge_col(col_pos['w'], standard_row, index)
-                # text = col['text']
-                # for m_index, pos_col in enumerate(demerge_cols):
-                #     create_col = {
-                #         'pos': pos_col,
-                #         'text': text
-                #     }
-                #     row.insert(index + m_index, create_col)
-                # row.pop(len(demerge_cols) + index)
-            index += 1
-            print(row)
-
     def set_col_pos_text(self, row, col_pos, standard_row, index, col):
-        demerge_cols = self.demerge_col(col_pos['w'], standard_row, index)
+        """
+        拆分单元格
+        @param row: 当前行
+        @param col_pos: 当前列的pos
+        @param standard_row: 标准行，需要在里面确定当前列要拆分成几个单元格
+        @param index: 标准行的索引
+        @param col: 当前行的列，需要里面的内容来对拆分的单元格进行内容的补充
+        @return:
+        """
+        if re.search('表$', col['text']):
+            pass
+        split_cols = self.demerge_col(col_pos['w'], standard_row, index)
         text = col['text']
-        for m_index, pos_col in enumerate(demerge_cols):
+        for m_index, pos_col in enumerate(split_cols):
             create_col = {
                 'pos': pos_col,
                 'text': text
             }
             row.insert(index + m_index, create_col)
-        row.pop(len(demerge_cols) + index)
+        row.pop(len(split_cols) + index)
 
-    def demerge_col(self, col_width, standard_row, col_index):
-        """拆分列"""
+    @staticmethod
+    def demerge_col(col_width, standard_row, col_index):
+        """
+        拆分单元格
+        @param col_width: 当前列的宽度
+        @param standard_row: 标准行
+        @param col_index: 标准行 列的索引
+        @return:
+        """
         sum_col_width = 0
         demerge_cols = []
         while col_index < len(standard_row):
@@ -304,20 +287,86 @@ class ProcessHtml:
             col_index += 1
         return demerge_cols
 
-    def get_before_col(self, pos, n, s_row_pos):
-        n -= 1
-        while n > -1:
-            row_pos = self.rows[n][0]['pos']
-            if pos['y'] == row_pos['y'] and s_row_pos['w'] == row_pos['w'] and pos['x'] > row_pos['x']:
-                return self.rows[n]
-            n -= 1
-        return {}
+    @staticmethod
+    def get_col_name_count(col_name, col):
+        pass
+
+
+    def format_table_data(self):
+        """
+        格式化table，针对表嵌表的情况，标题表格也被存入表中，需要拆出来
+        @return:
+        """
+        index = 0
+        doc_dict = []
+        temp_dict = {
+            'el_type': 'p',
+            'level': False,
+            'text': '',
+            'table_name': '',
+            'style_dict': {}
+        }
+        while index < len(self.rows):
+            row = self.rows[index]
+            row_val = []
+            row_text = []
+            for col in row:
+                text = col['text']
+                row_text.append(text)
+                if text == '':
+                    continue
+                row_val.append(text)
+            if not len(row_val):
+                self.rows.pop(index)
+                continue
+
+            if len(row_val):
+                self.col_to_pgh(row_val, index)
+            # if len(row_val) <= 2:
+            #     if len(row_val):
+            #         local_text = ''.join(list(row_val))
+            #         if temp_dict['text'] and local_text != temp_dict['text']:
+            #             print(loop_rows)
+            #         temp_dict['text'] = local_text
+            #         if self.process_row_title(local_text):
+            #             # self.rows.pop(index)
+            #             loop_rows = []
+            #             continue
+            index += 1
+        print(self.rows)
+
+    @staticmethod
+    def get_count(lst, x):
+        return lst.count(x)
+
+    def col_to_pgh(self, row_val, index):
+        """
+        将读成表格的内容拆分成段落，根据出现的次数来判断是不是被前行拆分的段落（如果出现多次）
+        @param row_val: 当前行的所有text值，不包含空值
+        @param index: 行索引
+        @return:
+        """
+        fil_row_val = list(set(row_val))
+        count_result = []
+        for item in fil_row_val:
+            count_result = self.get_count(row_val, item)
+        print(count_result)
+
+
+
+
+    def process_row_title(self, local_text):
+        """ 判断是不是标题 """
+        info = util.get_style_info(local_text)
+        if info:
+            return True
+        return False
 
     def save_table_last_row(self):
         if len(self.row):  # 最后一行要在读到段落的时候保存进rows里面
             self.rows.append(self.row)
             self.merge_table_row()
-
+            self.format_table_data()
             self.doc_dict.append({
                 'el_type': 'table',
                 'text': '',
@@ -332,7 +381,7 @@ class ProcessHtml:
 
     def process_element(self, _class, elem, index):
         """
-       @msg: 解析元素
+       @param index: 页码
        @param _class：当前元素的class，
        @param 段落的class一般为[m0 x3 h21 y148 ff2 fs2 fc0 sc1 ls0 ws0]，其中h21中的h表示元素的高度，后面的数字越大则元素的高度越高
        @param 单元格的class一般为[x21 y140 w24 h42]
@@ -379,12 +428,17 @@ class ProcessHtml:
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if con_index == 99:
+                if con_index in [99]:
                     children = content.contents[0].contents  # 只取第一层子集
+                    first_child = False
                     for index, item in enumerate(children):
-                        if not self.is_table and self.exclude_elem(item, index):
-                            continue
                         _class = item.attrs['class'][1:]
+                        if item.name == 'div' and first_child is False:  # 页眉不读
+                            first_child = True
+                            continue
+
+                        if not self.is_table and self.exclude_elem(item, index, _class):
+                            continue
                         self.process_element(_class, item, index)
             self.check_end()
         print(self.doc_dict)

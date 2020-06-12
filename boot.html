@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://cdn.staticfile.org/twitter-bootstrap/3.3.7/css/bootstrap.min.css">
+    <script src="https://cdn.staticfile.org/jquery/2.1.1/jquery.min.js"></script>
+    <script src="https://cdn.staticfile.org/twitter-bootstrap/3.3.7/js/bootstrap.min.js"></script>
+    <style>
+        .container {
+            width: 100%;
+        }
+
+        .container .group {
+            margin-bottom: 20px;
+        }
+
+        .container .group .title {
+            height: 40px;
+            font-size: 18px;
+            line-height: 40px;
+            border-bottom: 1px solid #dedede;
+        }
+
+        .container .group .content {
+        }
+
+        .container .group .content .row {
+            padding: 10px 0;
+        }
+
+        .container .group .content .row .cell {
+            display: flex;
+        }
+
+        .container .group .content .row .cell .label {
+            flex: 1;
+            font-size: 16px;
+            color: #000000;
+            text-align: left;
+        }
+
+        .container .group .content .row .cell .detail {
+            flex: 8;
+        }
+
+        /* -----table----   */
+        .content .table tr>td {
+            height: 100px;
+            line-height: 100px;
+        }
+        .content .table .img-box {
+            height: 100px;
+            width: 100px;
+        }
+        .content .table .img-box img {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="group">
+        <div class="title">订单信息</div>
+        <div class="content">
+            <div class="row">
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+                <div class="cell col-xs-6 col-sm-3">
+                    <div class="label">编号:</div>
+                    <div class="detail">9527</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="title">商品信息</div>
+        <div class="content">
+            <table class="table table-striped">
+                <thead>
+                <tr>
+                    <th>名称</th>
+                    <th>城市</th>
+                    <th>邮编</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr>
+                    <td>
+                        <div class="img-box">
+                            <img src="http://pic.nen.com.cn/600/15/50/30/15503030_624761.jpg" alt="">
+                        </div>
+                    </td>
+                    <td>Bangalore</td>
+                    <td>560001</td>
+                </tr>
+
+                <tr>
+                    <td>
+                        <div class="img-box">
+                            <img src="http://pic.nen.com.cn/600/15/50/30/15503030_624761.jpg" alt="">
+                        </div>
+                    </td>
+                    <td>Bangalore</td>
+                    <td>560001</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</html>
