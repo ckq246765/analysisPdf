@@ -33,14 +33,13 @@ class Util:
         u"^([a-zA-Z](?=[\.．、]?\s?(?!为|日为|系列)(?:[\u4e00-\u9fa5]))).+",  # 17 例：A XXX；a XXX；A.XXX；a.XXX
         u"^([①②③④⑤⑥⑦⑧⑨⑩]、?).+"  # 18 例：① XXX
     ]
+
     def __init__(self):
         self.title_pattern = "|".join(self.TITLE_STYLE)
 
     @staticmethod
     def doc_replace(sentence):
-        return sentence.replace("\r", "").replace("\x01", "").replace("\t", "").replace("\xa0", "").replace("\n",
-                                                                                                            "\x07",
-                                                                                                            "").replace(
+        return sentence.replace("\r", "").replace("\x01", "").replace("\t", "").replace("\xa0", "").replace("\n", "").replace("\x07", '').replace(
             "\x02", "").replace("\x0c", "").replace("\x0e", "").replace("\u3000", "").replace("\u200D", "").replace(
             "\u0007", "").replace("\x0b", "").strip()
 
@@ -111,6 +110,14 @@ class Util:
             pass
         return dict_style
 
+
+    def del_the_sequence(self, paragraph_text):
+        paragraph_text = re.sub(" ", "", paragraph_text)
+        if self.check_is_title(paragraph_text):
+            return self.get_style_info(paragraph_text, "").get("index")
+        return paragraph_text
+
+    # 判断是否是标题
     def check_is_title(self, paragraph_text):
         if re.search(self.SPECIAL_PGH_HEAD_NOT_TITLE, re.sub(" ", "", paragraph_text)):
             return False

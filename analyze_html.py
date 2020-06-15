@@ -288,9 +288,27 @@ class ProcessHtml:
         return demerge_cols
 
     @staticmethod
-    def get_col_name_count(col_name, col):
-        pass
+    def _get_col_val(row):
+        result = set()
+        for col in row:
+            result.add(col['text'])
+        return list(result)
 
+    def get_col_name_occurrences(self, row):
+        for col in row:
+            text = col['text']
+            if self.get_count(row, text) > 2:
+                return True
+        return False
+
+    @staticmethod
+    def row_have_value(row):
+        result = []
+        for col in row:
+            text = col['text']
+            if text:
+                result.append(text)
+        return bool(len(result))
 
     def format_table_data(self):
         """
@@ -298,69 +316,61 @@ class ProcessHtml:
         @return:
         """
         index = 0
-        doc_dict = []
-        temp_dict = {
-            'el_type': 'p',
-            'level': False,
-            'text': '',
-            'table_name': '',
-            'style_dict': {}
-        }
+        table_data = []
         while index < len(self.rows):
             row = self.rows[index]
-            row_val = []
-            row_text = []
+            is_continue = False
+            col_inner = ''.join(self._get_col_val(row))
+            _join_cols_val = util.check_is_title(col_inner)
             for col in row:
                 text = col['text']
-                row_text.append(text)
-                if text == '':
-                    continue
-                row_val.append(text)
-            if not len(row_val):
-                self.rows.pop(index)
-                continue
+                if (util.check_is_title(text) or _join_cols_val) and self.get_count(row, text) > 2:
+                    if len(table_data):
+                        # 在遇到新的标题前，将表格数据保存起来
+                        self.save_doc_dict('', 'table', {}, False, table_data)
+                        table_data = []
 
-            if len(row_val):
-                self.col_to_pgh(row_val, index)
-            # if len(row_val) <= 2:
-            #     if len(row_val):
-            #         local_text = ''.join(list(row_val))
-            #         if temp_dict['text'] and local_text != temp_dict['text']:
-            #             print(loop_rows)
-            #         temp_dict['text'] = local_text
-            #         if self.process_row_title(local_text):
-            #             # self.rows.pop(index)
-            #             loop_rows = []
-            #             continue
+                    # 如果当前列中含有标题，则把整列删除，并保存为标题
+                    self.rows.pop(index)
+                    self.save_doc_dict(col['text'], 'p', col['pos'], True)
+                    is_continue = True
+                    break
+            if is_continue:
+                continue
+            else:
+                if self.row_have_value(row):  # 行数据都为空的，就排除掉
+                    table_data.append(row)
             index += 1
         print(self.rows)
 
+    def clear_empty_row(self, table_data):
+        """ 对表格中的空列进行处理 """
+
+        for row in table_data:
+            pass
+
+
+    def save_doc_dict(self, pgh='', dict_type='p', style_dict={}, level=False, table_data=[]):
+        table_name = ''
+        if dict_type == 'table':
+            table_name = self.get_table_name()
+            self.clear_empty_row(table_data)
+        temp_dict = {
+            'el_type': dict_type,
+            'level': level,
+            'text': pgh,
+            'table_name': table_name,
+            'table_data': table_data,
+            'style_dict': style_dict
+        }
+        self.doc_dict.append(temp_dict)
+
     @staticmethod
-    def get_count(lst, x):
-        return lst.count(x)
-
-    def col_to_pgh(self, row_val, index):
-        """
-        将读成表格的内容拆分成段落，根据出现的次数来判断是不是被前行拆分的段落（如果出现多次）
-        @param row_val: 当前行的所有text值，不包含空值
-        @param index: 行索引
-        @return:
-        """
-        fil_row_val = list(set(row_val))
-        count_result = []
-        for item in fil_row_val:
-            count_result = self.get_count(row_val, item)
-        print(count_result)
-
-
-
-
-    def process_row_title(self, local_text):
-        """ 判断是不是标题 """
-        info = util.get_style_info(local_text)
-        if info:
-            return True
-        return False
+    def get_count(row, col_text):
+        text_result = []
+        for col in row:
+            text_result.append(col['text'])
+        return text_result.count(col_text)
 
     def save_table_last_row(self):
         if len(self.row):  # 最后一行要在读到段落的时候保存进rows里面
