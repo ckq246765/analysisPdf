@@ -33,13 +33,16 @@ class Util:
         u"^([a-zA-Z](?=[\.．、]?\s?(?!为|日为|系列)(?:[\u4e00-\u9fa5]))).+",  # 17 例：A XXX；a XXX；A.XXX；a.XXX
         u"^([①②③④⑤⑥⑦⑧⑨⑩]、?).+"  # 18 例：① XXX
     ]
+    NOT_CHECK_TITLE_NUMBER_LIST = [11, 12, 13]
 
     def __init__(self):
         self.title_pattern = "|".join(self.TITLE_STYLE)
 
     @staticmethod
     def doc_replace(sentence):
-        return sentence.replace("\r", "").replace("\x01", "").replace("\t", "").replace("\xa0", "").replace("\n", "").replace("\x07", '').replace(
+        return sentence.replace("\r", "").replace("\x01", "").replace("\t", "").replace("\xa0", "").replace("\n",
+                                                                                                            "").replace(
+            "\x07", '').replace(
             "\x02", "").replace("\x0c", "").replace("\x0e", "").replace("\u3000", "").replace("\u200D", "").replace(
             "\u0007", "").replace("\x0b", "").strip()
 
@@ -74,7 +77,7 @@ class Util:
     def get_title_number(self, title_sytle_num, sequence):
         # 类似“1.1.XXX”和“1.1.1.XXX”因为难以数字化，所以暂时不处理
         if title_sytle_num not in self.NOT_CHECK_TITLE_NUMBER_LIST:
-            number_str = re.findall(u"([\d一二三四五六七八九十①②③④⑤⑥⑦⑧⑨⑩a-zA-Z]+)", Base.doc_replace(sequence))[0]
+            number_str = re.findall(u"([\d一二三四五六七八九十①②③④⑤⑥⑦⑧⑨⑩a-zA-Z]+)", self.doc_replace(sequence))[0]
             if re.match("^\d+$", number_str):
                 return int(number_str)
             elif re.match("^[一二三四五六七八九十]+$", number_str):
@@ -99,17 +102,17 @@ class Util:
                     sequence_str = list(filter(lambda x: bool(x), find_tuple))[0]  # 过滤掉空字符串并拿到第一个非空字符串
                     type_num_result = find_tuple.index(sequence_str)
                     content_str = pgh_text_processed.split(sequence_str, 1)[-1]
-                    content_str = re.sub('\.',"", content_str)  # BUG #16497  去掉 小数点
+                    content_str = re.sub('\.', "", content_str)  # BUG #16497  去掉 小数点
                     content_str = content_str.strip()
                     title_number = self.get_title_number(type_num_result, sequence_str)
                     # num:标题样式特征值，也是标题预设等级；sequence:标题序号（如标题“1、XXX”中的“1、”）； index:标题内容（如标题“1、XXX”中的“XXX”）
                     dict_style = {'title_style_num': type_num_result, 'sequence': sequence_str, 'index': content_str,
-                                  "title_id": pgh_id, "title_text": paragraph_text, "title_level": "", "title_number": title_number, "title_pid": ""}
+                                  "title_id": pgh_id, "title_text": paragraph_text, "title_level": "",
+                                  "title_number": title_number, "title_pid": ""}
         except Exception as e:
             print(e)
             pass
         return dict_style
-
 
     def del_the_sequence(self, paragraph_text):
         paragraph_text = re.sub(" ", "", paragraph_text)
@@ -126,5 +129,49 @@ class Util:
         pgh_text_processed = re.sub(self.DATE_REPLACE_PATTERN, "@替换日期@", pgh_text_processed)
         find_list = re.findall(self.title_pattern, pgh_text_processed)
         return bool(find_list)  # and len(paragraph_text) < self.MAX_TITLE_LENGTH
+
+    def del_the_sequence(self, paragraph_text):
+        paragraph_text = re.sub(" ", "", paragraph_text)
+        if self.check_is_title(paragraph_text):
+            return self.get_style_info(paragraph_text, "").get("index")
+        return paragraph_text
+        # 将字母转换为整型数字
+
+    @staticmethod
+    def letter_to_int(letter_str):
+        letter_dict = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8, "I": 9, "J": 10, "K": 11,
+                       "L": 12, "M": 13, "N": 14, "O": 15, "P": 16, "Q": 17, "R": 18, "S": 19, "T": 20, "U": 21,
+                       "V": 22, "W": 23, "X": 24, "Y": 25, "Z": 26}
+        return letter_dict.get(letter_str.upper()[0], 1)
+
+    # 将中文汉字转换为整型数字
+    @staticmethod
+    def chinese_to_int(china_number):
+        common_used_numerals_tmp = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8,
+                                    '九': 9, '十': 10}
+        total = 0
+        r = 1  # 表示单位：个十百千...
+        for i in range(len(china_number) - 1, -1, -1):
+            val = common_used_numerals_tmp.get(china_number[i])
+            if val == None:
+                return china_number
+            if val >= 10 and i == 0:  # 应对 十三 十四 十*之类
+                if val > r:
+                    r = val
+                    total = total + val
+                else:
+                    r = r * val
+            elif val >= 10:
+                r = val if val > r else r * val
+            else:
+                total = total + r * val
+        return total
+
+    # 将“①②③④⑤⑥⑦⑧⑨⑩”转换为整型数字
+    @staticmethod
+    def circle_to_int(circle_number):
+        CIRCLE_NUM = {'①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5, '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10}
+        return CIRCLE_NUM[circle_number]
+
 
 util = Util()
