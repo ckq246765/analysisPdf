@@ -3,13 +3,17 @@
 import re
 import json
 import datetime
+from typing import Set
+
 from flask_cors import CORS
 from bs4 import BeautifulSoup
 from decimal import Decimal
 from util_base.util import util
 from flask import Flask
+
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}})
+
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, o):
@@ -17,11 +21,13 @@ class DecimalEncoder(json.JSONEncoder):
             return float(o)
         super(DecimalEncoder, self).default(o)
 
+
 @app.route('/process')
 def main():
     return {
         "data": json.dumps(ProcessHtml().start(), ensure_ascii=False, cls=DecimalEncoder)
     }
+
 
 class ProcessHtml:
 
@@ -32,6 +38,9 @@ class ProcessHtml:
         self.rows = []
         self.is_table = False
         self.table_name = ''
+        self.page_width = ''
+        self.footer_values = set()
+        self.exclude_list = []
 
     def save_el_style(self, soup):
         content = []
@@ -40,12 +49,25 @@ class ProcessHtml:
             content += sty.contents
         self.style_content = ''.join(content)
 
-    @staticmethod
-    def exclude_elem(elem, index, _class):
+    def exclude_elem(self, elem, index, _class):
         in_text = re.sub(' ', '', elem.text)
         # for cls in _class:
         #     if re.search('^(ls)', cls):
         #         return True
+
+        # 对页脚的排除
+        left_cls, is_f_h = '', False
+        for item in _class:
+            if re.search('^x', item):
+                left_cls = item
+            if re.search('^m', item):
+                is_f_h = True
+        if is_f_h and left_cls:
+            style_dict = self.get_elem_style([left_cls])
+            if style_dict.__contains__('x') and style_dict['x']:
+                left, text = style_dict['x'], re.sub(' ', '', elem.text)
+                if self.page_width and (self.page_width - left) <= 5 and text.isdigit():
+                    return True
 
         if index == 1 and re.search('公告编号', in_text):
             return True
@@ -137,12 +159,18 @@ class ProcessHtml:
         return True
 
     @staticmethod
-    def is_row_line(current_style, rows):
+    def is_row_line(current_style, row, rows):
         """ 是否是同一行 """
         if len(rows):
-            first_row_pos = rows[0][0]['pos']  # 第0行第0列
-            if first_row_pos['x'] == current_style['x']:
-                return True
+            # 通过right来识别是否是最后一列
+            # first_row_pos = rows[0][0]['pos']  # 第0行第0列
+            # last_row_pos = rows[-1][-1]['pos']  # 如果上一行的最后一列的x值大于当前列的x值，则说明是新的一行
+            # first_col_pos = rows[-1][0]['pos']
+            # if first_row_pos['x'] != row[0]['pos']['x']:
+            #     if last_row_pos['x'] > current_style['x']:
+            #         return True
+            # if first_col_pos['x'] == current_style['x']:
+            #     return True
         return False
 
     def reset_params(self):
@@ -156,13 +184,14 @@ class ProcessHtml:
             row_lens_arr.append(len(item))
         return row_lens_arr
 
-    def format_table(self, style_dict):
+    def format_table(self, style_dict, rows):
         """ 将段落和表格拆分出来 """
         n, doc_dict, table_data, table_name = 0, [], [], ''
-        while n < len(self.rows):
-            row = self.rows[n]
+        rows = rows if rows else self.rows
+        while n < len(rows):
+            row = rows[n]
             col_inner = ''.join(self._get_col_val(row))
-            if util.check_is_title(col_inner): #  or re.search('(:|：|，|。)$', col_inner) 暂时先注释，表中有数据满足这个条件，导致数据读取错误
+            if util.check_is_title(col_inner):  # or re.search('(:|：|，|。)$', col_inner) 暂时先注释，表中有数据满足这个条件，导致数据读取错误
                 if len(table_data):
                     if table_name == '':
                         table_name = self.get_table_name(doc_dict)
@@ -179,7 +208,7 @@ class ProcessHtml:
                     'text': col_inner,
                     'style_dict': style_dict
                 })
-                self.rows.pop(n)
+                rows.pop(n)
                 continue
 
             if self.row_have_value(row):  # 行数据都为空的，就排除掉
@@ -196,9 +225,9 @@ class ProcessHtml:
             })
         return doc_dict
 
-    def compile_table(self, style_dict):
+    def compile_table(self, style_dict={}, table_data=[]):
         """ 对数据格式化，将表和段落分离 """
-        res_data = self.format_table(style_dict)
+        res_data = self.format_table(style_dict, table_data)
         for data in res_data:
             if data['el_type'] == 'table':
                 self.merge_table_row(data['table_data'])
@@ -226,9 +255,10 @@ class ProcessHtml:
     def check_col_pos(col, s_col):
         return bool(col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x'])
 
-    def insert_row_col(self, s_col, row, row_index, s_col_index, _type, table_data=[]):
+    def insert_row_col(self, s_col, row, row_index, s_col_index, _type, table_data=[], standard_row=[]):
         """
         对当前的列进行补充
+        @param standard_row: 标准行
         @param table_data: 表格数据
         @param _type: 拆分还是插入
         @param s_col: 标准行的当前行
@@ -243,6 +273,17 @@ class ProcessHtml:
         while n > -1:
             cols = table_data[n]
             for col in cols:
+                #  针对普通股股本结构这样的有合并表头的表
+                if s_col['pos']['x'] == col['pos']['x'] and col['pos']['w'] > s_col['pos']['w']:
+                    split_cols = self.demerge_col(col['pos']['w'], standard_row, s_col_index)
+                    text = col['text']
+                    for index, sp in enumerate(split_cols):
+                        create_col = {
+                            'pos': sp,
+                            'text': text
+                        }
+                        row.insert(index, create_col)
+
                 if col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x']:
                     if _type == 'insert':
                         row.insert(s_col_index, col)
@@ -267,7 +308,7 @@ class ProcessHtml:
         """
         for s_index, s_row in enumerate(standard_row):
             if s_index > len(row) - 1:
-                self.insert_row_col(s_row, row, row_index, s_index, 'append', table_data)
+                self.insert_row_col(s_row, row, row_index, s_index, 'append', table_data, standard_row)
                 continue
 
             if self.check_col_pos(s_row, row[s_index]):
@@ -278,7 +319,7 @@ class ProcessHtml:
                 pos, s_pos = row[s_index]['pos'], s_row['pos']
 
                 if s_pos['x'] < pos['x']:
-                    self.insert_row_col(s_row, row, row_index, s_index, 'insert', table_data)
+                    self.insert_row_col(s_row, row, row_index, s_index, 'insert', table_data, standard_row)
 
                 if s_pos['x'] == pos['x'] and pos['w'] > s_pos['w']:
                     self.set_col_pos_text(row, pos, standard_row, s_index, row[s_index])
@@ -389,8 +430,11 @@ class ProcessHtml:
             for row in table_data:
                 _bool = bool(row[col]['text'] == col_val)
                 if col_len - 1 > col > 0:
-                    if row[col + 1]['text'] == row[col]['text'] or row[col - 1]['text'] == row[col]['text']:  # 强迫被拆分的列
-                        _bool = True
+                    try:
+                        if row[col + 1]['text'] == row[col]['text'] or row[col - 1]['text'] == row[col]['text']:  # 强迫被拆分的列
+                            _bool = True
+                    except Exception as e:
+                        print(e)
                 col_list.append(_bool)
                 col_val = row[col]['text']
             cols_val.append(col_list)
@@ -444,6 +488,68 @@ class ProcessHtml:
         # self.save_table_last_row()
         self.process_table()
 
+    def is_one_table(self, row):
+        last_doc_dict = self.doc_dict[-1]
+        if last_doc_dict['el_type'] == 'table':
+            return False
+        return True
+
+    def merge_table_data(self, process_table):
+        """
+        根据条件，将不同页码的表格合并为同一个表格，doc_dict中的最后一个表格的最后一行的每一列的w和process_table中的第一个行的每一列的w相等并且table_name不相同，就认为是同一个表格
+        @param process_table: 拆分、合并之后的表格
+        @return:
+        """
+        if not len(self.doc_dict):
+            return True
+        last_doc_dict = self.doc_dict[-1]
+        print('----------process_table-------------', process_table)
+        if process_table[0]['el_type'] != 'table':
+            return False
+        process_table_data = process_table[0]['table_data']
+        process_table_name = process_table[0]['table_name']
+        if last_doc_dict['el_type'] == 'table':
+            table_data = last_doc_dict['table_data']
+            last_row = table_data[-1]
+            process_first_row = process_table_data[0]
+
+            if len(last_row) and len(process_first_row):
+                if not process_table_name and last_doc_dict['table_name']:
+                    compile_table_data = self.compile_table({}, last_doc_dict['table_data'] + process_table_data)
+                    self.doc_dict[-1]['table_data'] = compile_table_data[0]['table_data']
+                    return True
+
+            if len(last_row) == len(process_first_row):
+                result: Set[bool] = set()
+                for index, col in enumerate(last_row):
+                    pr_pos = process_first_row[index]['pos']
+                    pos = col['pos']
+                    result.add(bool(pos['w'] == pr_pos['w']))
+                if len(result) > 1:
+                    return True
+                else:
+                    if len(result) == 1:
+                        if list(result)[0] is False:
+                            return True
+                        if list(result)[0] is True:
+                            self.doc_dict[-1]['table_data'] += process_table_data
+                            return False
+            return True
+        return True
+
+    def save_first_child_text(self, elem):
+        """
+        将前几个的dom的内容缓存起来，如果每页都有出现，那么就当做是也没处理
+        @param elem:
+        @return:
+        """
+        if elem.text in self.footer_values:
+            return True
+
+        if elem.text:
+            self.footer_values.add(elem.text)
+            return False
+
     def process_element(self, _class, elem, index):
         """
        @param index: 页码
@@ -462,7 +568,12 @@ class ProcessHtml:
                 self.is_table = False
                 process_res = self.process_table(style_dict)
                 if len(process_res):
-                    self.doc_dict += process_res
+                    # 如果process_res和doc_dict中的最后一个表格是同源的，就合并到一起
+                    if self.merge_table_data(process_res):
+                        self.doc_dict += process_res
+                        # last_table_data = self.doc_dict
+                        # self.compile_table(style_dict)
+                        print(self.doc_dict)
                 if not text:
                     return False
 
@@ -482,12 +593,27 @@ class ProcessHtml:
                 if not self.table_name:
                     self.table_name = self.get_table_name()
                 temp_dict = {'pos': style_dict, 'text': text}
-                if self.is_same_line(style_dict, self.row) and not self.is_row_line(style_dict, self.rows):
+                if self.is_same_line(style_dict, self.row) and not self.is_row_line(style_dict, self.row, self.rows):
                     self.row.append(temp_dict)
                 else:
+                    # 这里判断当前行是不是上一个表格的内容，如果当前行和上一个表格的最后一行的每列的宽度都一致，就当做是同一个表格
+                    if self.is_one_table(self.row):
+                        pass
                     self.rows.append(self.row)
                     self.row = []
                     self.row.append(temp_dict)
+
+    def get_page_width(self, elem):
+        """
+        获取page的宽度，在排除页脚的时候使用
+        @param elem:
+        @return:
+        """
+        if not self.page_width:
+            page_class = elem.attrs['class']
+            style_dict = self.get_elem_style(page_class)
+            if style_dict.__contains__('w'):
+                self.page_width = style_dict['w']
 
     def start(self):
         start = datetime.datetime.now()
@@ -496,12 +622,16 @@ class ProcessHtml:
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if con_index in [36, 37]:  # in [103]:  # con_index in [103]
+                if con_index in [9]:  # con_index in [36, 37] in [103]:  # con_index in [103]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     print('-----------------page------------------', con_index + 1)
                     for index, item in enumerate(children):
                         _class = item.attrs['class'][1:]
+                        if index < 4:
+                            if self.save_first_child_text(item):
+                                continue
+
                         if item.name == 'div' and first_child is False:  # 页眉不读
                             first_child = True
                             continue
@@ -514,9 +644,6 @@ class ProcessHtml:
         print("文档IO用时：" + str((end - start).seconds) + u"秒")
         print(json.dumps(self.doc_dict, ensure_ascii=False, cls=DecimalEncoder))
         return
-
-
-
 
 
 if __name__ == '__main__':
