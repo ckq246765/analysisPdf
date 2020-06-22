@@ -66,7 +66,7 @@ class ProcessHtml:
             style_dict = self.get_elem_style([left_cls])
             if style_dict.__contains__('x') and style_dict['x']:
                 left, text = style_dict['x'], re.sub(' ', '', elem.text)
-                if self.page_width and (self.page_width - left) <= 5 and text.isdigit():
+                if self.page_width and (self.page_width / 2 - left) <= 5 and text.isdigit():
                     return True
 
         if index == 1 and re.search('公告编号', in_text):
@@ -167,7 +167,6 @@ class ProcessHtml:
             通过判断每个单元格的right值来确定是否是新的一行
         """
         if len(rows):
-            print(current_style)
             if len(row) > 1:
                 prev_style = row[len(row) - 2]['pos']
                 if current_style['r'] < prev_style['r']:
@@ -251,8 +250,11 @@ class ProcessHtml:
     def compile_table(self, style_dict={}, table_data=[]):
         """ 对数据格式化，将表和段落分离 """
         res_data = self.format_table(style_dict, table_data)
+
         for data in res_data:
             if data['el_type'] == 'table':
+                if data['table_name'] == '按坏账计提方法分类披露':
+                    print(1)
                 self.merge_table_row(data['table_data'])
                 self.clear_empty_row(data['table_data'])
         return res_data
@@ -462,7 +464,6 @@ class ProcessHtml:
                 col_val = row[col]['text']
             cols_val.append(col_list)
             col_val = ''
-        print(cols_val)
         n = 0
         while n < len(cols_val):
             col_status = list(set(cols_val[n]))
@@ -471,7 +472,6 @@ class ProcessHtml:
                 cols_val.pop(n)
                 continue
             n += 1
-        print(table_data)
 
     @staticmethod
     def delete_table_col(table_data, col_index):
@@ -508,7 +508,6 @@ class ProcessHtml:
         return process_res
 
     def check_end(self):
-        # self.save_table_last_row()
         self.process_table()
 
     def is_one_table(self, row):
@@ -596,7 +595,6 @@ class ProcessHtml:
                     self.doc_dict += process_res
                     # last_table_data = self.doc_dict
                     # self.compile_table(style_dict)
-                    print(self.doc_dict)
                 if not text:
                     return False
 
@@ -645,11 +643,13 @@ class ProcessHtml:
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if con_index in [105, 106, 107]:  # con_index in [36, 37] in [103]:  # con_index in [103]
+                self.get_page_width(content)
+                if con_index in [104, 105, 106]:  # con_index in [36, 37] in [103]:  # con_index in [103]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     print('-----------------page------------------', con_index + 1)
                     for index, item in enumerate(children):
+                        print(item.text)
                         _class = item.attrs['class'][1:]
                         if index < 4:
                             if self.save_first_child_text(item):
