@@ -4,11 +4,9 @@ import re
 import json
 import datetime
 from typing import Set
-from flask_cors import CORS
 from bs4 import BeautifulSoup
 from decimal import Decimal
 from util_base.util import util
-from flask import Flask
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -130,7 +128,7 @@ class AnalyzeTable(object):
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if con_index in [7, 8, 9]:  #con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
+                if True:  # con_index in [7, 8, 9] con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     self.get_page_width(content)
@@ -153,7 +151,7 @@ class AnalyzeTable(object):
 
     @staticmethod
     def exclude_table_name(sentence):
-        value_pattern = u"((?<![^\(（\s])单位(?!情况)|单位(?=:|：)|(?<!\S)单元|(?<!的|及|和|\S)(?<!单项|款项|账面)金额)|（除特别注明外，金额单位均为(?:人民币)元）"
+        value_pattern = u"((?<![^\(（\s])单位(?!情况)|单位(?=:|：)|(?<!\S)单元|(?<!的|及|和|\S)(?<!单项|款项|账面)金额)|（除特别注明外，金额单位均为(?:人民币)元）|□不适用|√"
         return bool(re.search(value_pattern, sentence))
 
     @staticmethod
@@ -281,11 +279,14 @@ class AnalyzeTable(object):
             n += 1
 
         if len(table_data):
-            doc_dict.append({
-                'el_type': 'table',
-                'table_name': row_inner,
-                'table_data': table_data
-            })
+            if len(doc_dict):
+                table_name = self.get_table_name()
+                doc_dict.append({
+                    'el_type': 'table',
+                    's': 'append',
+                    'table_name': table_name,
+                    'table_data': table_data
+                })
         return doc_dict
 
     def insert_row_col(self, s_col, row, row_index, s_col_index, _type, table_data=[], standard_row=[]):
