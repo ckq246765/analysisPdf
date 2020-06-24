@@ -6,7 +6,19 @@ import datetime
 from typing import Set
 from bs4 import BeautifulSoup
 from decimal import Decimal
+
 from util_base.util import util
+from flask_cors import CORS
+from flask import Flask
+
+app = Flask(__name__)
+cors = CORS(app, resources={r"/*": {"origins": "*"}})
+@app.route('/process')
+def main():
+    return {
+        "data": json.dumps(ProcessTable().start(), ensure_ascii=False, cls=DecimalEncoder)
+    }
+
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -37,6 +49,11 @@ class AnalyzeTable(object):
             content += sty.contents
         self.style_content = ''.join(content)
 
+    @staticmethod
+    def exclude_table_val(_class):
+        last_class = _class[-1:][0]
+        return bool(re.search('^h', last_class))
+
     def exclude_elem(self, elem, index, _class):
         in_text = re.sub(' ', '', elem.text)
         left_cls, is_f_h = '', False
@@ -49,16 +66,16 @@ class AnalyzeTable(object):
             style_dict = self.get_elem_style([left_cls])
             if style_dict.__contains__('x') and style_dict['x']:
                 left, text = style_dict['x'], re.sub(' ', '', elem.text)
-                if self.page_width and (self.page_width - left) <= 5 and text.isdigit():
+                if self.page_width and (self.page_width - left) <= 5 and text.isdigit(): # 一般是页码数，不处理
                     return True
 
         if index == 1 and re.search('公告编号', in_text):
             return True
         if (index == 0 and elem.name == 'img') or elem.name == 'a':  # img标签和a标签不解析
             return True
-
-        if len(in_text) < 3 and re.fullmatch('\d', in_text):  # 一般是页码数，不处理
-            return True
+        #
+        # if len(in_text) < 3 and re.fullmatch('\d', in_text):  # 一般是页码数，不处理
+        #     return True
         return False
 
     @staticmethod
@@ -128,7 +145,7 @@ class AnalyzeTable(object):
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if True:  # con_index in [7, 8, 9] con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
+                if con_index < 7:  # con_index in [7, 8, 9] con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     self.get_page_width(content)
@@ -143,11 +160,14 @@ class AnalyzeTable(object):
                             first_child = True
                             continue
 
-                        if not self.is_table and self.exclude_elem(item, index, _class):
+                        if self.exclude_elem(item, index, _class):
                             continue
                         self.process_element(_class, item)
 
             self.check_end()
+            end = datetime.datetime.now()
+            print("文档IO用时：" + str((end - start).seconds) + u"秒")
+            return json.dumps(self.doc_dict, ensure_ascii=False, cls=DecimalEncoder)
 
     @staticmethod
     def exclude_table_name(sentence):
@@ -204,8 +224,9 @@ class AnalyzeTable(object):
     def col_is_pgh(row):
         """ 如果row中的所有col的值都一样，那就当做是段落来处理 """
         col_values = set()
-        for col in row:
-            col_values.add(col['text'])
+        if len(row) > 1:
+            for col in row:
+                col_values.add(col['text'])
         return bool(len(col_values) == 1)
 
     @staticmethod
@@ -397,11 +418,14 @@ class AnalyzeTable(object):
                 if s_pos['x'] == pos['x'] and pos['w'] > s_pos['w']:
                     self.set_col_pos_text(row, pos, standard_row, s_index, row[s_index])
 
+    def merge_and_clear_table(self, table_data):
+        self.merge_table_row(table_data)
+        self.clear_empty_row(table_data)
+
     def process_table_params(self, res_data):
         for data in res_data:
             if data['el_type'] == 'table':
-                self.merge_table_row(data['table_data'])
-                self.clear_empty_row(data['table_data'])
+                self.merge_and_clear_table(data['table_data'])
         return res_data
 
     def clear_empty_row(self, table_data):
@@ -443,6 +467,8 @@ class AnalyzeTable(object):
             right_doc_dict = self.doc_dict[tmp_index:]
             self.doc_dict = left_doc_dict + doc_dict + right_doc_dict
             self.loop_index += len(doc_dict)
+            return True
+        self.merge_and_clear_table(table_data)
         # print(self.doc_dict)
         # n, doc_dict, result_row, table_name = 0, [], [], ''
         # while n < len(table_data):
@@ -548,9 +574,12 @@ class ProcessTable(AnalyzeTable):
                 self.save_pgh(elem_type, text, style_dict)
 
             if elem_type == 'table':
-                self.save_table(style_dict, text)
+                if self.exclude_table_val(_class):
+                    self.save_table(style_dict, text)
 
     def merge_table_data(self):
+        if not len(self.doc_dict):
+            return False
         last_child = self.doc_dict[-1]
         if len(self.row):
             self.rows.append(self.row)
@@ -559,28 +588,43 @@ class ProcessTable(AnalyzeTable):
             if (last_child['table_name'] == '' and self.table_name == '') or (last_child['table_name'] == self.table_name):
                 last_child['table_data'] += self.rows
                 self.rows = []
+        else:
+            self.table_name = self.get_table_name()
+            self.doc_dict.append({
+                'el_type': 'table',
+                'table_name': self.table_name,
+                'table_data': self.rows
+            })
+            self.table_name = ''
+
+    def merge_elem_sentence(self, style_dict, text):
+        if len(self.doc_dict):
+            prev_dict = self.doc_dict[-1]
+            if prev_dict['el_type'] == 'table':
+                return False
+            prev_style_dict = prev_dict['style_dict']
+            if not prev_style_dict:
+                return False
+            fs, x, h, y = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y']
+            if (fs == style_dict['fs'] and (style_dict['x'] <= x) and not re.search('\.|。', prev_dict['text'])) and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
+                prev_dict['text'] += text
+                prev_dict['style_dict'] = style_dict
                 return True
         return False
 
     def save_pgh(self, elem_type, text, style_dict):
         if self.is_table:
-            if not self.merge_table_data():
+            self.merge_table_data()  # 对表格的一些合并处理
+            self.is_table, self.rows, self.table_name = False, [], ''
+
+        if text:
+            if not self.merge_elem_sentence(style_dict, text):
                 self.doc_dict.append({
-                    'el_type': 'table',
-                    'text': '',
-                    'table_name': self.table_name,
-                    'table_data': self.rows,
+                    'el_type': elem_type,
+                    'text': text,
+                    'table_name': '',
                     'style_dict': style_dict
                 })
-            self.is_table, self.rows, self.table_name = False, [], ''
-            return False
-
-        self.doc_dict.append({
-            'el_type': elem_type,
-            'text': text,
-            'table_name': '',
-            'style_dict': style_dict
-        })
 
     def save_table(self, style_dict, text):
         self.is_table = True
@@ -608,5 +652,6 @@ class ProcessTable(AnalyzeTable):
 
 
 if __name__ == '__main__':
-    process = ProcessTable()
-    process.start()
+    app.run(host='localhost', port='9527', debug=True)
+    # process = ProcessTable()
+    # process.start()
