@@ -13,12 +13,13 @@ from flask import Flask
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}})
+
+
 @app.route('/process')
 def main():
     return {
         "data": json.dumps(ProcessTable().start(), ensure_ascii=False, cls=DecimalEncoder)
     }
-
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -66,7 +67,7 @@ class AnalyzeTable(object):
             style_dict = self.get_elem_style([left_cls])
             if style_dict.__contains__('x') and style_dict['x']:
                 left, text = style_dict['x'], re.sub(' ', '', elem.text)
-                if self.page_width and (self.page_width - left) <= 5 and text.isdigit(): # 一般是页码数，不处理
+                if self.page_width and (self.page_width - left) <= 5 and text.isdigit():  # 一般是页码数，不处理
                     return True
 
         if index == 1 and re.search('公告编号', in_text):
@@ -145,7 +146,7 @@ class AnalyzeTable(object):
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if con_index < 7:  # con_index in [7, 8, 9] con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
+                if con_index in [99, 100, 101]:  # con_index in [7, 8, 9] con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     self.get_page_width(content)
@@ -182,7 +183,7 @@ class AnalyzeTable(object):
         if current_style:
             # if last_cell['pos']['y'] != current_style['y']:
             #     return False
-            if last_cell['pos']['x'] > current_style['x']:
+            if last_cell['pos']['r'] > current_style['r']:
                 return False
         return True
 
@@ -209,7 +210,7 @@ class AnalyzeTable(object):
                 print(e)
         _result = list(set(result))
         _result.sort(key=result.index)
-        return ''.join(_result)
+        return result, ''.join(_result)
 
     @staticmethod
     def row_have_value(row):
@@ -220,9 +221,22 @@ class AnalyzeTable(object):
                 result.append(text)
         return bool(len(result))
 
-    @staticmethod
-    def col_is_pgh(row):
+    def col_is_pgh(self, row, row_inner, table_data, n):
         """ 如果row中的所有col的值都一样，那就当做是段落来处理 """
+        if n > 0:
+            prev_row = table_data[n - 1]
+            _has_total = False
+            for col in prev_row:
+                if re.search('^(合计)|^(总计)', col['text']):
+                    _has_total = True
+                    break
+
+            if _has_total:
+                return bool(len(prev_row) > len(row))
+            # if len(row) < 3:
+            #     row_val_result, prev_row_inner = self._get_col_val(prev_row)
+            #     if
+
         col_values = set()
         if len(row) > 1:
             for col in row:
@@ -250,27 +264,33 @@ class AnalyzeTable(object):
         @return:
         """
         sum_col_width = 0
-        demerge_cols = []
+        demerge_cols, demerge_col_inner = [], []
         while col_index < len(standard_row):
             s_col_pos = standard_row[col_index]['pos']
+            text = standard_row[col_index]['text']
             sum_col_width += s_col_pos['w']
             demerge_cols.append(s_col_pos)
-            if abs(col_width - sum_col_width) < 2:
+            demerge_col_inner.append(text)
+            if abs(col_width - sum_col_width) < 2 or abs(
+                    col_width - (sum_col_width + Decimal(len(demerge_cols) / 2))) < 2:
                 break
             col_index += 1
         return demerge_cols
 
     @staticmethod
     def delete_table_col(table_data, col_index):
-        for row in table_data:
-            row.pop(col_index)
+        try:
+            for row in table_data:
+                row.pop(col_index)
+        except Exception as e:
+            print(e)
 
     def recursion(self, table_data, doc_dict, tmp_index):
         n, table_name, result_row = 0, '', []
         while n < len(table_data):
             table_row = table_data[n]
-            row_inner = self._get_col_val(table_row)
-            if row_inner and (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row)):
+            row_val_result, row_inner = self._get_col_val(table_row)
+            if row_inner and (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
                 pos = table_row[0]['pos']
                 if len(result_row):
                     if not len(doc_dict):
@@ -363,8 +383,8 @@ class AnalyzeTable(object):
         @param col: 当前行的列，需要里面的内容来对拆分的单元格进行内容的补充
         @return:
         """
-        if re.search('表$', col['text']):
-            pass
+        # if re.search('表$', col['text']):
+        #     pass
         split_cols = self.demerge_col(col_pos['w'], standard_row, index)
         text = col['text']
         for m_index, pos_col in enumerate(split_cols):
@@ -376,6 +396,7 @@ class AnalyzeTable(object):
         row.pop(len(split_cols) + index)
 
     def merge_table_row(self, table_data):
+        self.delete_surplus_first_col(table_data)
         row_lens_arr = self.get_max_row_len(table_data)
         if len(list(set(row_lens_arr))) > 1:
             max_len = max(row_lens_arr)
@@ -391,6 +412,28 @@ class AnalyzeTable(object):
                     continue
                 self.process_table_cols(standard_row, row, n, table_data)
                 n -= 1
+
+    @staticmethod
+    def get_first_col_left(table_data, row_index):
+        result = set()
+        for index, item in enumerate(table_data):
+            if not len(item) or index == row_index:
+                continue
+            result.add(item[0]['pos']['x'])
+        return result
+
+    def delete_surplus_first_col(self, table_data):
+        """
+        删除首列多余的列，避免在拆分以及合并单元格时出现问题，P102=>2018 年 12 月 31 日单项金额重大并单独计提坏账准备的应收账款：
+        根据首列的left值来判断删除
+        @param table_data:
+        @return:
+        """
+        for index, row in enumerate(table_data):
+            cols_left = self.get_first_col_left(table_data, index)
+            first_col = row[0]
+            if first_col['pos']['x'] not in cols_left and not first_col['text']:
+                row.pop(0)
 
     def process_table_cols(self, standard_row, row, row_index, table_data=[]):
         """
@@ -415,7 +458,8 @@ class AnalyzeTable(object):
                 if s_pos['x'] < pos['x']:
                     self.insert_row_col(s_row, row, row_index, s_index, 'insert', table_data, standard_row)
 
-                if s_pos['x'] == pos['x'] and pos['w'] > s_pos['w']:
+                if s_pos['x'] == pos['x'] and pos['w'] > s_pos[
+                    'w']:  # 如果标准行的列的left值和当前列的left值相等，但是当前列的列宽大于标准列的列宽，则要拆分当前列。
                     self.set_col_pos_text(row, pos, standard_row, s_index, row[s_index])
 
     def merge_and_clear_table(self, table_data):
@@ -430,6 +474,8 @@ class AnalyzeTable(object):
 
     def clear_empty_row(self, table_data):
         """ 对表格中的空列进行处理 """
+        if not len(table_data):
+            return False
         cols_val = []
         col_len = len(table_data[0])
         col_val = ''
@@ -439,7 +485,8 @@ class AnalyzeTable(object):
                 try:
                     _bool = bool(row[col]['text'] == col_val)
                     if col_len - 1 > col > 0:
-                        if row[col + 1]['text'] == row[col]['text'] or row[col - 1]['text'] == row[col]['text']:  # 强迫被拆分的列
+                        if row[col + 1]['text'] == row[col]['text'] or row[col - 1]['text'] == row[col][
+                            'text']:  # 强迫被拆分的列
                             _bool = True
                     col_list.append(_bool)
                     col_val = row[col]['text']
@@ -544,6 +591,8 @@ class AnalyzeTable(object):
 
     def check_is_title(self, row_inner, table_row):
         is_title = self.util.check_is_title(row_inner)
+        if re.search('按组合计提坏账准备：|按单项计提坏账准备：|\d{4}年\d{1,2}月.*计提.*(账款)$', row_inner):  # 先加一些规则来判断 P127
+            return True
         # row_values = self.get_row_values(table_row)
         # if is_title:
         #     style_info = self.util.get_style_info(row_inner)
@@ -585,7 +634,8 @@ class ProcessTable(AnalyzeTable):
             self.rows.append(self.row)
             self.row = []
         if last_child['el_type'] == 'table':
-            if (last_child['table_name'] == '' and self.table_name == '') or (last_child['table_name'] == self.table_name):
+            if (last_child['table_name'] == '' and self.table_name == '') or (
+                    last_child['table_name'] == self.table_name):
                 last_child['table_data'] += self.rows
                 self.rows = []
         else:
@@ -606,7 +656,8 @@ class ProcessTable(AnalyzeTable):
             if not prev_style_dict:
                 return False
             fs, x, h, y = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y']
-            if (fs == style_dict['fs'] and (style_dict['x'] <= x) and not re.search('\.|。', prev_dict['text'])) and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
+            if (fs == style_dict['fs'] and (style_dict['x'] <= x) and not re.search('\.|。', prev_dict['text'])) and (
+                    h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
                 prev_dict['text'] += text
                 prev_dict['style_dict'] = style_dict
                 return True
