@@ -30,6 +30,9 @@ class DecimalEncoder(json.JSONEncoder):
 
 
 class AnalyzeTable(object):
+    EXCLUDE_TABLE_NAME = u"(?<![^\(（\s])单位(?!情况)|单位(?=:|：)|(?<!\S)单元|" \
+                         u"调整情况说明.*：.*详见|" \
+                         u"（除特别注明外，金额单位均为(?:人民币)元）|.*表$|.*表(（续）)$"
 
     def __init__(self):
         self.style_content = ''
@@ -116,7 +119,13 @@ class AnalyzeTable(object):
         @param: x h y fs: left height bottom font-size
         @return: x h y fs对应的值
         """
-        style_dict = {}
+        style_dict = {
+            'x': Decimal(0),
+            'w': Decimal(0),
+            'y': Decimal(0),
+            'r': Decimal(0),
+            'fs': Decimal(0)
+        }
         for cls in _class:
             match = re.search('^[xhyw]|^fs', cls)
             if match:
@@ -146,7 +155,7 @@ class AnalyzeTable(object):
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if con_index in [99, 100, 101]:  # con_index in [7, 8, 9] con_index in [130, 131, 132, 133, 134, 135, 136]:  # con_index in [36, 37] in [103]:  # con_index in [103]
+                if True:  # con_index in [21, 22, 23]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     self.get_page_width(content)
@@ -172,7 +181,11 @@ class AnalyzeTable(object):
 
     @staticmethod
     def exclude_table_name(sentence):
-        value_pattern = u"((?<![^\(（\s])单位(?!情况)|单位(?=:|：)|(?<!\S)单元|(?<!的|及|和|\S)(?<!单项|款项|账面)金额)|（除特别注明外，金额单位均为(?:人民币)元）|□不适用|√"
+        value_pattern = u"((?<![^\(（\s])单位(?!情况)|单位(?=:|：)|(?<!\S)单元|(?<!的|及|和|\S)(?<!单项|款项|账面)金额)|" \
+                        u"（除特别注明外，金额单位均为(?:人民币)元）|□不适用|√|编制单位[﹕:：]|" \
+                        u"是 ?√|^（续|^续）|^续：|^(（续）)|^(（续上表）)|^续表|^续上表|接上表|√ ?适用|" \
+                        u"上期金额|本期金额|法定代表人.*会计机构负责人|^\(续\)[﹕:：]|||||\(*?适用|([\(|□||]*?适用)|" \
+                        u"[\(|（]收益以.*?列示[）|\)]|[\(|（]续表[）|\)]"
         return bool(re.search(value_pattern, sentence))
 
     @staticmethod
@@ -205,7 +218,8 @@ class AnalyzeTable(object):
         result = []
         for col in row:
             try:
-                result.append(col['text'])
+                if col['text']:
+                    result.append(col['text'])
             except Exception as e:
                 print(e)
         _result = list(set(result))
@@ -223,6 +237,7 @@ class AnalyzeTable(object):
 
     def col_is_pgh(self, row, row_inner, table_data, n):
         """ 如果row中的所有col的值都一样，那就当做是段落来处理 """
+        # 按组合计提坏账准备：|按单项计提坏账准备：|
         if n > 0:
             prev_row = table_data[n - 1]
             _has_total = False
@@ -232,20 +247,76 @@ class AnalyzeTable(object):
                     break
 
             if _has_total:
+                cols_val_result, cols_val = self._get_col_val(row)
+                if len(cols_val_result) > 1:
+                    return False
                 return bool(len(prev_row) > len(row))
-            # if len(row) < 3:
-            #     row_val_result, prev_row_inner = self._get_col_val(prev_row)
-            #     if
+
+        if re.search('.*(的情况：)$|(涉及政府补助的项目：)$', row_inner):  # 存在不同企业所得税税率纳税主体的情况：
+            return True
 
         col_values = set()
+        n_empty_col_values = []
+
         if len(row) > 1:
             for col in row:
-                col_values.add(col['text'])
-        return bool(len(col_values) == 1)
+                text = col['text']
+                if text:
+                    n_empty_col_values.append(text)
+                col_values.add(text)
+            if len(col_values) < 3 and len(set(n_empty_col_values)) == 1:
+                return True
+        return bool(len(col_values) == 1) or bool(len(set(n_empty_col_values)) == 1 and len(n_empty_col_values[0]) > 20)
+
+    def get_inner_char_num(self):
+        if len(self.doc_dict) < 2:
+            return True
+        prev_doc_dict = self.doc_dict[-1]
+        if prev_doc_dict['el_type'] == 'table':
+            if re.search('(商业模式|项目重大变动原因|资产负债项目重大变动原因|经营计划|风险因素|不确定性因素|经营计划或目标|公司发展战略|行业发展趋势)[:：]?$', prev_doc_dict['table_name']):
+                return False
+        return True
+
+    def row_inner_if_paragraph(self, row_inner, row, table_data, n):
+        is_title = self.util.check_is_title(row_inner)
+        if is_title and len(row) < 3:
+            return True
+        if n > 0:
+            prev_row = table_data[n - 1]
+            _has_total = False
+            for col in prev_row:
+                if re.search('^(合计)|^(总计)', col['text']):
+                    _has_total = True
+                    break
+            if _has_total:
+                cols_val_result, cols_val = self._get_col_val(row)
+                if len(cols_val_result) > 1:
+                    return False
+                return bool(len(prev_row) > len(row))
+
+        if re.search('.*(的情况：)$|(涉及政府补助的项目：)$', row_inner):  # 存在不同企业所得税税率纳税主体的情况：
+            return True
+
+        if re.search('\d{4}年\d{1,2}月.*计提.*(账款)$', row_inner):  # 先加一些规则来判断 P127
+            return True
+
+        if len(row) <= 2:
+            col_width = []
+            col_vals = set()
+            for col in row:
+                col_width.append(col['pos']['w'])
+                if col['text']:
+                    col_vals.add(col['text'])
+            col_max_width = max(col_width)
+            if len(col_vals) < 2 and self.get_inner_char_num() and col_max_width > 300:
+                return True
+        return False
 
     @staticmethod
     def check_col_pos(col, s_col):
-        return bool(col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x'])
+        """ 单元格的宽和left值会有丁点的误差 """
+        return bool(abs(col['pos']['w'] - s_col['pos']['w']) <= 2) and (abs(col['pos']['x'] - s_col['pos']['x']) <= 2)
+        # return bool(col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x'])
 
     @staticmethod
     def get_max_row_len(rows):
@@ -271,8 +342,9 @@ class AnalyzeTable(object):
             sum_col_width += s_col_pos['w']
             demerge_cols.append(s_col_pos)
             demerge_col_inner.append(text)
-            if abs(col_width - sum_col_width) < 2 or abs(
-                    col_width - (sum_col_width + Decimal(len(demerge_cols) / 2))) < 2:
+            # todo 先暂时使用sum_col_width > col_width
+            if sum_col_width > col_width or abs(col_width - sum_col_width) < 2 or abs(
+                col_width - (sum_col_width + Decimal(len(demerge_cols) / 2))) < 2:
                 break
             col_index += 1
         return demerge_cols
@@ -290,7 +362,7 @@ class AnalyzeTable(object):
         while n < len(table_data):
             table_row = table_data[n]
             row_val_result, row_inner = self._get_col_val(table_row)
-            if row_inner and (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
+            if row_inner and self.row_inner_if_paragraph(row_inner, table_row, table_data, n):  # (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
                 pos = table_row[0]['pos']
                 if len(result_row):
                     if not len(doc_dict):
@@ -343,35 +415,69 @@ class AnalyzeTable(object):
         @return:
         """
         n = row_index - 1
-        if_break = False
         table_data = table_data if table_data else self.rows
         while n > -1:
-            cols = table_data[n]
-            for col in cols:
-                #  针对普通股股本结构这样的有合并表头的表
-                if s_col['pos']['x'] == col['pos']['x'] and col['pos']['w'] > s_col['pos']['w']:
-                    split_cols = self.demerge_col(col['pos']['w'], standard_row, s_col_index)
-                    text = col['text']
-                    for index, sp in enumerate(split_cols):
-                        create_col = {
-                            'pos': sp,
-                            'text': text
-                        }
-                        row.insert(index, create_col)
+            def recursion(num):
+                if num > -1:
+                    cols = table_data[num]
+                    for col in cols:
+                        #  针对普通股股本结构这样的有合并表头的表
+                        col_rect = self.target_col_rect(table_data, len(standard_row), 'w', s_col_index)
+                        if s_col['pos']['x'] == col['pos']['x'] and col['pos']['w'] not in col_rect:
+                            split_cols = self.demerge_col(col['pos']['w'], standard_row, s_col_index)
+                            text = col['text']
+                            for index, sp in enumerate(split_cols):
+                                create_col = {
+                                    'pos': sp,
+                                    'text': text
+                                }
+                                row.insert(index, create_col)
+                            return True
 
-                if col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x']:
-                    if _type == 'insert':
-                        row.insert(s_col_index, col)
-                        if_break = True
-                        break
+                        if col['pos']['w'] in col_rect and col['pos']['x'] == s_col['pos']['x']:
+                            if _type == 'insert':
+                                row.insert(s_col_index, col)
+                                return True
 
-                    if _type == 'append':
-                        if_break = True
-                        row.append(col)
-                        break
-            if if_break:
+                            if _type == 'append':
+                                row.append(col)
+                                return True
+                    num -= 1
+                    return recursion(num)
+
+            if recursion(n):
                 break
             n -= 1
+
+            # for col in cols:
+            #     #  针对普通股股本结构这样的有合并表头的表
+            #     if s_col['pos']['x'] == col['pos']['x'] and col['pos']['w'] > s_col['pos']['w']:
+            #         split_cols = self.demerge_col(col['pos']['w'], standard_row, s_col_index)
+            #         text = col['text']
+            #         for index, sp in enumerate(split_cols):
+            #             create_col = {
+            #                 'pos': sp,
+            #                 'text': text
+            #             }
+            #             row.insert(index, create_col)
+            #         if_break = True
+            #         break
+            #
+            #     if col['pos']['w'] == s_col['pos']['w'] and col['pos']['x'] == s_col['pos']['x']:
+            #         if _type == 'insert':
+            #             row.insert(s_col_index, col)
+            #             if_break = True
+            #             break
+            #
+            #         if _type == 'append':
+            #             if_break = True
+            #             row.append(col)
+            #             break
+            #
+            #
+            # if if_break:
+            #     break
+            # n -= 1
 
     def set_col_pos_text(self, row, col_pos, standard_row, index, col):
         """
@@ -422,6 +528,14 @@ class AnalyzeTable(object):
             result.add(item[0]['pos']['x'])
         return result
 
+    @staticmethod
+    def get_first_col_vals(table_data):
+        vals = set()
+        for row in table_data:
+            first_col = row[0]
+            vals.add(bool(first_col['text']))
+        return vals
+
     def delete_surplus_first_col(self, table_data):
         """
         删除首列多余的列，避免在拆分以及合并单元格时出现问题，P102=>2018 年 12 月 31 日单项金额重大并单独计提坏账准备的应收账款：
@@ -429,11 +543,17 @@ class AnalyzeTable(object):
         @param table_data:
         @return:
         """
+        first_col_vals = self.get_first_col_vals(table_data)
         for index, row in enumerate(table_data):
             cols_left = self.get_first_col_left(table_data, index)
             first_col = row[0]
-            if first_col['pos']['x'] not in cols_left and not first_col['text']:
+            if len(first_col_vals) == 1 and list(first_col_vals)[0] is False:  # 如果第一列都是空值，也删除
                 row.pop(0)
+                continue
+
+            if not first_col['text']:
+                if first_col['pos']['x'] not in cols_left:
+                    row.pop(0)
 
     def process_table_cols(self, standard_row, row, row_index, table_data=[]):
         """
@@ -458,9 +578,28 @@ class AnalyzeTable(object):
                 if s_pos['x'] < pos['x']:
                     self.insert_row_col(s_row, row, row_index, s_index, 'insert', table_data, standard_row)
 
-                if s_pos['x'] == pos['x'] and pos['w'] > s_pos[
-                    'w']:  # 如果标准行的列的left值和当前列的left值相等，但是当前列的列宽大于标准列的列宽，则要拆分当前列。
-                    self.set_col_pos_text(row, pos, standard_row, s_index, row[s_index])
+                # if s_pos['x'] == pos['x'] and pos['w'] > s_pos['w']:
+                # 如果标准行的列的left值和当前列的left值相等，但是当前列的列宽大于标准列的列宽，则要拆分当前列。
+                if s_pos['x'] == pos['x']:
+                    col_rect_w = self.target_col_rect(table_data, len(standard_row), 'w', s_index)
+                    if pos['w'] not in col_rect_w:
+                        self.set_col_pos_text(row, pos, standard_row, s_index, row[s_index])
+
+    @staticmethod
+    def target_col_rect(table_data, col_len, attr, col_index):
+        """
+        获取所有标准行的attr属性（attr：x、w、h）
+        @param col_index: 标准行对应的列
+        @param table_data: 数据源
+        @param col_len: 标准行的长度
+        @param attr: 属性
+        @return:
+        """
+        col_attrs = set()
+        for row in table_data:
+            if len(row) == col_len:
+                col_attrs.add(row[col_index]['pos'][attr])
+        return col_attrs
 
     def merge_and_clear_table(self, table_data):
         self.merge_table_row(table_data)
@@ -516,42 +655,6 @@ class AnalyzeTable(object):
             self.loop_index += len(doc_dict)
             return True
         self.merge_and_clear_table(table_data)
-        # print(self.doc_dict)
-        # n, doc_dict, result_row, table_name = 0, [], [], ''
-        # while n < len(table_data):
-        #     table_row = table_data[n]
-        #     row_inner = self._get_col_val(table_row)
-        #     print('-----------row_inner------------', row_inner)
-        #     if row_inner and (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row)):
-        #         if len(result_row):
-        #             pos = table_row[0]['pos']
-        #             pgh_dict = {
-        #                 'el_type': 'p',
-        #                 'text': row_inner,
-        #                 'style_dict': pos
-        #             }
-        #             self.doc_dict.insert(tmp_index + 1, pgh_dict)
-        #             pass
-        #         table_data.pop(n)
-        #         remain_table_data = table_data[n:]
-        #         table_data = table_data[0: n]
-        #         self.doc_dict.insert(tmp_index + 2, {
-        #             'el_type': 'table',
-        #             'table_name': row_inner,
-        #             'text': '',
-        #             'style_dict': {},
-        #             'table_data': remain_table_data
-        #         })
-        #         continue
-        #
-        #     if self.row_have_value(table_row):
-        #         result_row.append(table_row)
-        #     else:
-        #         table_data.pop(n)
-        #         continue
-        #
-        #     n += 1
-        # print(self.doc_dict)
 
     def get_table_name(self, doc_dict=[], tmp_index=None):
         doc_dict = doc_dict if doc_dict else self.doc_dict
@@ -570,7 +673,7 @@ class AnalyzeTable(object):
                     n -= 1
                     continue
                 else:
-                    table_name = text
+                    table_name = re.sub('[\(|（].*(续|续上表)[\)|）]|', '', text)
                     break
             except Exception as e:
                 print(e)
@@ -591,13 +694,8 @@ class AnalyzeTable(object):
 
     def check_is_title(self, row_inner, table_row):
         is_title = self.util.check_is_title(row_inner)
-        if re.search('按组合计提坏账准备：|按单项计提坏账准备：|\d{4}年\d{1,2}月.*计提.*(账款)$', row_inner):  # 先加一些规则来判断 P127
+        if re.search('\d{4}年\d{1,2}月.*计提.*(账款)$', row_inner):  # 先加一些规则来判断 P127
             return True
-        # row_values = self.get_row_values(table_row)
-        # if is_title:
-        #     style_info = self.util.get_style_info(row_inner)
-        #     if style_info:
-        #         index = style_info['index']
         return is_title and bool(len(table_row) < 3)
 
 
@@ -618,13 +716,17 @@ class ProcessTable(AnalyzeTable):
         if class_name and elem_type:
             text = re.sub(' ', '', elem.text)
             style_dict = self.get_elem_style(_class)
+
+            if re.search(self.EXCLUDE_TABLE_NAME, text):  # todo 这里有bug，不能直接判断
+                elem_type = 'p'
+
             # 存之前判断是否是同一段落的
             if elem_type == 'p':
-                self.save_pgh(elem_type, text, style_dict)
+                return self.save_pgh(elem_type, text, style_dict)
 
             if elem_type == 'table':
                 if self.exclude_table_val(_class):
-                    self.save_table(style_dict, text)
+                    return self.save_table(style_dict, text)
 
     def merge_table_data(self):
         if not len(self.doc_dict):
@@ -633,34 +735,58 @@ class ProcessTable(AnalyzeTable):
         if len(self.row):
             self.rows.append(self.row)
             self.row = []
-        if last_child['el_type'] == 'table':
-            if (last_child['table_name'] == '' and self.table_name == '') or (
+        try:
+            if last_child['el_type'] == 'table':
+                if (last_child['table_name'] == '' and self.table_name == '') or (
                     last_child['table_name'] == self.table_name):
-                last_child['table_data'] += self.rows
-                self.rows = []
-        else:
-            self.table_name = self.get_table_name()
-            self.doc_dict.append({
-                'el_type': 'table',
-                'table_name': self.table_name,
-                'table_data': self.rows
-            })
-            self.table_name = ''
+                    last_child['table_data'] += self.rows
+                    self.rows = []
+            else:
+                self.table_name = self.get_table_name()
+                self.doc_dict.append({
+                    'el_type': 'table',
+                    'table_name': self.table_name,
+                    'table_data': self.rows
+                })
+                self.table_name = '', []
+        except Exception as e:
+            print(e)
 
     def merge_elem_sentence(self, style_dict, text):
         if len(self.doc_dict):
             prev_dict = self.doc_dict[-1]
+            info = self.util.get_style_info(text)
+            if info:
+                return False
+
+            if re.search('.*表$', text):
+                return False
+
             if prev_dict['el_type'] == 'table':
                 return False
             prev_style_dict = prev_dict['style_dict']
             if not prev_style_dict:
                 return False
             fs, x, h, y = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y']
-            if (fs == style_dict['fs'] and (style_dict['x'] <= x) and not re.search('\.|。', prev_dict['text'])) and (
-                    h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
-                prev_dict['text'] += text
-                prev_dict['style_dict'] = style_dict
+            try:
+                if (fs == style_dict['fs'] and (style_dict['x'] <= x or style_dict['y'] - y <= 2) and not re.search('\.|。', prev_dict['text'])) and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
+                    prev_dict['text'] += text
+                    prev_dict['style_dict'] = style_dict
+                    return True
+            except Exception as e:
+                print(e)
+        return False
+
+    def sentence_is_table_name(self, text):
+        """ 当前段落如果是 续上表、xx表（续）这种的就不保存了 """
+        text = re.sub('[\(|（].*(续|续上表)[\)|）]|', '', text)
+        if len(self.doc_dict):
+            last_doc_dict = self.doc_dict[-1]
+            if not text:
                 return True
+            if last_doc_dict['el_type'] == 'table':
+                if last_doc_dict['table_name'] == text:
+                    return True
         return False
 
     def save_pgh(self, elem_type, text, style_dict):
@@ -669,6 +795,8 @@ class ProcessTable(AnalyzeTable):
             self.is_table, self.rows, self.table_name = False, [], ''
 
         if text:
+            if self.sentence_is_table_name(text):
+                return False
             if not self.merge_elem_sentence(style_dict, text):
                 self.doc_dict.append({
                     'el_type': elem_type,
