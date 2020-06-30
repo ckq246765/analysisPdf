@@ -10,6 +10,7 @@ from decimal import Decimal
 from util_base.util import util
 from flask_cors import CORS
 from flask import Flask
+import subprocess
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}})
@@ -75,7 +76,7 @@ class AnalyzeTable(object):
 
         if index == 1 and re.search('公告编号', in_text):
             return True
-        if (index == 0 and elem.name == 'img') or elem.name == 'a':  # img标签和a标签不解析
+        if (index == 0 and elem.name == 'img'):  # img标签和a标签不解析  or elem.name == 'a'
             return True
         #
         # if len(in_text) < 3 and re.fullmatch('\d', in_text):  # 一般是页码数，不处理
@@ -103,7 +104,7 @@ class AnalyzeTable(object):
 
     def save_first_child_text(self, elem):
         """
-        将前几个的dom的内容缓存起来，如果每页都有出现，那么就当做是也没处理
+        将前几个的dom的内容缓存起来，如果每页都有出现，那么就当做是页眉处理
         @param elem:
         @return:
         """
@@ -150,12 +151,12 @@ class AnalyzeTable(object):
 
     def start(self):
         start = datetime.datetime.now()
-        soup = BeautifulSoup(open('test.p.html', encoding='utf-8'), features='html.parser')
+        soup = BeautifulSoup(open('out/873256_绵实股份_2019年_.html', encoding='utf-8'), features='html.parser')
         self.save_el_style(soup)
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if True:  # con_index in [21, 22, 23]
+                if True:  # con_index in [53, 54, 55]:  # con_index in [21, 22, 23]
                     children = content.contents[0].contents  # 只取第一层子集
                     first_child = False
                     self.get_page_width(content)
@@ -268,16 +269,18 @@ class AnalyzeTable(object):
                 return True
         return bool(len(col_values) == 1) or bool(len(set(n_empty_col_values)) == 1 and len(n_empty_col_values[0]) > 20)
 
-    def get_inner_char_num(self):
+    def get_inner_char_num(self, doc_dict_index):
         if len(self.doc_dict) < 2:
             return True
-        prev_doc_dict = self.doc_dict[-1]
-        if prev_doc_dict['el_type'] == 'table':
-            if re.search('(商业模式|项目重大变动原因|资产负债项目重大变动原因|经营计划|风险因素|不确定性因素|经营计划或目标|公司发展战略|行业发展趋势)[:：]?$', prev_doc_dict['table_name']):
-                return False
+        table_name = self.doc_dict[doc_dict_index]['table_name']
+        if re.search('(商业模式|变动原因|经营计划|行业情况|风险因素|不确定性因素|经营计划或目标|公司发展战略|行业发展趋势|研发项目情况).{0,3}[:：]?$', table_name):
+            return False
         return True
 
-    def row_inner_if_paragraph(self, row_inner, row, table_data, n):
+    def row_inner_if_paragraph(self, row_inner, row, table_data, n, tmp_index):
+        if not self.get_inner_char_num(tmp_index):
+            return False
+
         is_title = self.util.check_is_title(row_inner)
         if is_title and len(row) < 3:
             return True
@@ -308,7 +311,7 @@ class AnalyzeTable(object):
                 if col['text']:
                     col_vals.add(col['text'])
             col_max_width = max(col_width)
-            if len(col_vals) < 2 and self.get_inner_char_num() and col_max_width > 300:
+            if len(col_vals) < 2 and self.get_inner_char_num(tmp_index) and col_max_width > 300:
                 return True
         return False
 
@@ -357,12 +360,36 @@ class AnalyzeTable(object):
         except Exception as e:
             print(e)
 
+    @staticmethod
+    def merge_table_cols(table_row):
+        """
+        如果同一行中单元格的right值相同，则合并为一个单元格
+        @param table_row:
+        @return:
+        """
+        n = 0
+        while n < len(table_row):
+            col = table_row[n]
+            pos = col['pos']
+            x = n + 1
+            while x < len(table_row):
+                c_col = table_row[x]
+                c_pos = c_col['pos']
+                if pos['r'] == c_pos['r']:
+                    col['text'] += c_col['text']
+                    table_row.pop(x)
+                    continue
+                x += 1
+            n += 1
+
     def recursion(self, table_data, doc_dict, tmp_index):
         n, table_name, result_row = 0, '', []
         while n < len(table_data):
             table_row = table_data[n]
+            self.merge_table_cols(table_row)
             row_val_result, row_inner = self._get_col_val(table_row)
-            if row_inner and self.row_inner_if_paragraph(row_inner, table_row, table_data, n):  # (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
+            if row_inner and self.row_inner_if_paragraph(row_inner, table_row, table_data, n,
+                                                         tmp_index):  # (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
                 pos = table_row[0]['pos']
                 if len(result_row):
                     if not len(doc_dict):
@@ -662,7 +689,7 @@ class AnalyzeTable(object):
         if tmp_index:
             n = tmp_index
         table_name = ''
-        while n > 0:
+        while n > -1:
             temp_dict = doc_dict[n]
             if temp_dict['el_type'] == 'table':
                 n -= 1
@@ -729,28 +756,35 @@ class ProcessTable(AnalyzeTable):
                     return self.save_table(style_dict, text)
 
     def merge_table_data(self):
-        if not len(self.doc_dict):
-            return False
-        last_child = self.doc_dict[-1]
+        self.table_name = self.get_table_name()
         if len(self.row):
             self.rows.append(self.row)
             self.row = []
-        try:
-            if last_child['el_type'] == 'table':
-                if (last_child['table_name'] == '' and self.table_name == '') or (
-                    last_child['table_name'] == self.table_name):
-                    last_child['table_data'] += self.rows
-                    self.rows = []
-            else:
-                self.table_name = self.get_table_name()
-                self.doc_dict.append({
-                    'el_type': 'table',
-                    'table_name': self.table_name,
-                    'table_data': self.rows
-                })
-                self.table_name = '', []
-        except Exception as e:
-            print(e)
+        self.doc_dict.append({
+            'el_type': 'table',
+            'table_name': self.table_name,
+            'table_data': self.rows
+        })
+        self.table_name = '', []
+        if not len(self.doc_dict):
+            return False
+        last_child = self.doc_dict[-1]
+        # try:
+        #     if last_child['el_type'] == 'table':
+        #         if (last_child['table_name'] == '' and self.table_name == '') or (
+        #             last_child['table_name'] == self.table_name):
+        #             last_child['table_data'] += self.rows
+        #             self.rows = []
+        #     else:
+        #         self.table_name = self.get_table_name()
+        #         self.doc_dict.append({
+        #             'el_type': 'table',
+        #             'table_name': self.table_name,
+        #             'table_data': self.rows
+        #         })
+        #         self.table_name = '', []
+        # except Exception as e:
+        #     print(e)
 
     def merge_elem_sentence(self, style_dict, text):
         if len(self.doc_dict):
@@ -769,7 +803,8 @@ class ProcessTable(AnalyzeTable):
                 return False
             fs, x, h, y = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y']
             try:
-                if (fs == style_dict['fs'] and (style_dict['x'] <= x or style_dict['y'] - y <= 2) and not re.search('\.|。', prev_dict['text'])) and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
+                if (fs == style_dict['fs'] and (style_dict['x'] <= x or style_dict['y'] - y <= 2) and not re.search(
+                    '\.|。', prev_dict['text'])) and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
                     prev_dict['text'] += text
                     prev_dict['style_dict'] = style_dict
                     return True
