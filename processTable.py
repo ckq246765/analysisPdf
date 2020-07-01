@@ -46,6 +46,7 @@ class AnalyzeTable(object):
         self.util = util
         self.footer_values = set()
         self.exclude_list = []
+        self.recursion_elem_contents = []
 
     def save_el_style(self, soup):
         content = []
@@ -149,32 +150,53 @@ class AnalyzeTable(object):
             if style_dict.__contains__('w'):
                 self.page_width = style_dict['w']
 
+    @staticmethod
+    def get_elem_node_name(els):
+        node_names = set()
+        for el in els:
+            node_names.add(el.name)
+        return node_names
+
+    def recursion_elem(self, item, index):
+        first_child = False
+        _class = item.attrs['class'][1:]
+        c_children = item.contents
+        node_names = self.get_elem_node_name(c_children)
+        if len(list(item.contents)) > 2 and len(list(node_names)) == 1 and list(node_names)[0] == 'div':
+            self.recursion_elem_contents = item.contents
+
+        for c_index, c_child in enumerate(self.recursion_elem_contents):
+            return self.recursion_elem(c_child, c_index)
+
+        if index < 4:
+            if self.save_first_child_text(item):
+                return True
+
+        if item.name == 'div' and first_child is False:  # 页眉不读
+            first_child = True
+            return True
+
+        if self.exclude_elem(item, index, _class):
+            return True
+        self.process_element(_class, item)
+
+    def loop_child_elem(self, children):
+        for index, item in enumerate(children):
+            self.recursion_elem_contents = []
+            self.recursion_elem(item, index)
+
     def start(self):
         start = datetime.datetime.now()
-        soup = BeautifulSoup(open('out/873256_绵实股份_2019年_.html', encoding='utf-8'), features='html.parser')
+        soup = BeautifulSoup(open('out/873280_秦燕科技_2019年_.html', encoding='utf-8'), features='html.parser')
         self.save_el_style(soup)
         contents = soup.find_all('div', id=re.compile('^(pf).*[\d|[a-zA-Z]'))  # 获取page
         if len(contents):
             for con_index, content in enumerate(contents):
-                if True:  # con_index in [53, 54, 55]:  # con_index in [21, 22, 23]
+                if con_index < 5:  # con_index in [53, 54, 55]:  # con_index in [21, 22, 23]
                     children = content.contents[0].contents  # 只取第一层子集
-                    first_child = False
                     self.get_page_width(content)
                     print('-----------------page------------------', con_index + 1)
-                    for index, item in enumerate(children):
-                        _class = item.attrs['class'][1:]
-                        if index < 4:
-                            if self.save_first_child_text(item):
-                                continue
-
-                        if item.name == 'div' and first_child is False:  # 页眉不读
-                            first_child = True
-                            continue
-
-                        if self.exclude_elem(item, index, _class):
-                            continue
-                        self.process_element(_class, item)
-
+                    self.loop_child_elem(children)
             self.check_end()
             end = datetime.datetime.now()
             print("文档IO用时：" + str((end - start).seconds) + u"秒")
@@ -272,7 +294,13 @@ class AnalyzeTable(object):
     def get_inner_char_num(self, doc_dict_index):
         if len(self.doc_dict) < 2:
             return True
+
         table_name = self.doc_dict[doc_dict_index]['table_name']
+
+        title_info = self.util.get_style_info(table_name)
+        if re.search('.*(情况|分析[:：]?)$', table_name):  # 控股股东情况
+            return False
+
         if re.search('(商业模式|变动原因|经营计划|行业情况|风险因素|不确定性因素|经营计划或目标|公司发展战略|行业发展趋势|研发项目情况).{0,3}[:：]?$', table_name):
             return False
         return True
@@ -786,28 +814,55 @@ class ProcessTable(AnalyzeTable):
         # except Exception as e:
         #     print(e)
 
+    @staticmethod
+    def if_merge(fs, x, h, y, prev_dict, style_dict, text):
+        if fs == style_dict['fs'] and (style_dict['x'] <= x or style_dict['y'] - y <= 2):
+            # and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5))
+            if not re.search('(\.|。)$', prev_dict['text']):
+                return True
+
+    @staticmethod
+    def sentence_end_is_date(prev_dict, text):
+        if re.search('[年月]$', prev_dict['text']) and re.search('^\d{1,2}', text):
+            return True
+
+        if re.search('\d{1,4}$', prev_dict['text']) and re.search('^[年月日]', text):
+            return True
+
+        return False
+
     def merge_elem_sentence(self, style_dict, text):
         if len(self.doc_dict):
-            prev_dict = self.doc_dict[-1]
-            info = self.util.get_style_info(text)
-            if info:
-                return False
-
-            if re.search('.*表$', text):
-                return False
-
-            if prev_dict['el_type'] == 'table':
-                return False
-            prev_style_dict = prev_dict['style_dict']
-            if not prev_style_dict:
-                return False
-            fs, x, h, y = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y']
             try:
-                if (fs == style_dict['fs'] and (style_dict['x'] <= x or style_dict['y'] - y <= 2) and not re.search(
-                    '\.|。', prev_dict['text'])) and (h == style_dict['h'] or abs(y - style_dict['y'] <= 5)):
+                prev_dict = self.doc_dict[-1]
+                info = self.util.get_style_info(text)
+
+                if prev_dict['el_type'] == 'table':
+                    return False
+
+                prev_style_dict = prev_dict['style_dict']
+                fs, x, h, y = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y']
+
+                if info:
+                    if not self.sentence_end_is_date(prev_dict, text):
+                        return False
+
+                if self.if_merge(fs, x, h, y, prev_dict, style_dict, text):
                     prev_dict['text'] += text
                     prev_dict['style_dict'] = style_dict
                     return True
+
+                if info:  # todo 14日至长期，注册资本200万元。 14会被当成title的序号
+                    return False
+
+                if re.search('.*表$', text):
+                    return False
+
+                if prev_dict['el_type'] == 'table':
+                    return False
+
+                if not prev_style_dict:
+                    return False
             except Exception as e:
                 print(e)
         return False
@@ -866,6 +921,6 @@ class ProcessTable(AnalyzeTable):
 
 
 if __name__ == '__main__':
-    app.run(host='localhost', port='9527', debug=True)
-    # process = ProcessTable()
-    # process.start()
+    # app.run(host='localhost', port='9527', debug=True)
+    process = ProcessTable()
+    process.start()
