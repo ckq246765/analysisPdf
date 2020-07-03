@@ -63,6 +63,25 @@ class AnalyzeTable(object):
         last_class = _class[-1:][0]
         return bool(re.search('^h', last_class))
 
+    def sentence_is_header(self, index, elem, _class):
+        elem_rect = self.get_elem_style(_class)
+        if elem_rect.__contains__('h') and self.page_rect.__contains__('h'):
+            if elem_rect['h'] == self.page_rect['h']:
+                child = elem.contents
+                node_names = self.get_elem_node_name(child)
+                if len(child) <= 1:
+                    return True
+                if len(node_names) > 1:
+                    return self.loop_child_elem(child)
+
+            if elem_rect['y'] <= 63:  # 62是页脚距离page的bottom值
+                return True
+        return False
+
+    def sentence_is_footer(self, index, elem, _class):
+        content = elem.contents
+        return False
+
     def exclude_elem(self, elem, index, _class):
         in_text = re.sub(' ', '', elem.text)
         left_cls, is_f_h = '', False
@@ -75,7 +94,7 @@ class AnalyzeTable(object):
             style_dict = self.get_elem_style([left_cls])
             if style_dict.__contains__('x') and style_dict['x']:
                 left, text = style_dict['x'], re.sub(' ', '', elem.text)
-                if self.page_width and (self.page_width - left) <= 5 and text.isdigit():  # 一般是页码数，不处理
+                if self.page_rect['w'] and (self.page_rect['w'] - left) <= 5 and text.isdigit():  # 一般是页码数，不处理
                     return True
 
         if index == 1 and re.search('公告编号', in_text):
@@ -84,9 +103,15 @@ class AnalyzeTable(object):
         if index == 0 and elem.name == 'img':  # img标签和a标签不解析  or elem.name == 'a'
             return True
 
-        if self.header_elem is False:
-            self.header_elem = True
+        if self.sentence_is_header(index, elem, _class):
             return True
+
+        if self.sentence_is_footer(index, elem, _class):
+            return True
+
+        # if self.header_elem is False:
+        #     self.header_elem = True
+        #     return True
         #
         # if len(in_text) < 3 and re.fullmatch('\d', in_text):  # 一般是页码数，不处理
         #     return True
@@ -160,19 +185,17 @@ class AnalyzeTable(object):
 
     @staticmethod
     def get_elem_node_name(els):
-        node_names = set()
+        node_names = []
         for el in els:
-            node_names.add(el.name)
+            if el.name in ['div']:
+                node_names.append(el.name)
         return node_names
 
     def recursion_elem(self, item, index):
         _class = item.attrs['class'][1:]
         c_children = item.contents
         print('-------text----------', item.text)
-        node_names = self.get_elem_node_name(c_children)
         style_dict = self.get_elem_style(_class)
-        if self.exclude_elem(item, index, _class):
-            return True
 
         # len(list(item.contents)) > 2 and len(list(node_names)) == 1 and list(node_names)[0] == 'div'
         if abs(style_dict.__contains__('h') and style_dict['h'] - self.page_rect['h']) <= 5:
@@ -180,6 +203,10 @@ class AnalyzeTable(object):
 
         if len(self.recursion_elem_contents):
             return self.loop_child_elem(self.recursion_elem_contents)
+
+        if self.exclude_elem(item, index, _class):
+            return True
+
         self.process_element(_class, item, index)
 
     def loop_child_elem(self, children):
@@ -195,7 +222,8 @@ class AnalyzeTable(object):
         if len(contents):
             for con_index, content in enumerate(contents):
                 self.page_rect = {}
-                if con_index in [38, 39, 40, 41]:  # con_index in [53, 54, 55]:  # con_index in [21, 22, 23]
+                if con_index in [66,
+                                 67]:  # con_index in [38, 39, 40, 41]:  # con_index in [53, 54, 55]:  # con_index in [21, 22, 23]
                     children = content.contents[0].contents  # 只取第一层子集
                     self.get_page_rect(content)
                     self.header_elem = False
@@ -220,10 +248,13 @@ class AnalyzeTable(object):
         if not len(row):
             return True
         last_cell = row[-1]
+        first_cell = row[0]
         if current_style:
             # if last_cell['pos']['y'] != current_style['y']:
             #     return False
             if last_cell['pos']['r'] > current_style['r']:
+                if current_style['x'] == first_cell['x']:  # 有的表格中的行是类标题的描述，横跨所有列（秦燕科技——首次执行新金融工具准则追溯调整前期比较数据的说明）
+                    return True
                 return False
         return True
 
@@ -296,8 +327,8 @@ class AnalyzeTable(object):
         return bool(len(col_values) == 1) or bool(len(set(n_empty_col_values)) == 1 and len(n_empty_col_values[0]) > 20)
 
     def get_inner_char_num(self, doc_dict_index):
-        if len(self.doc_dict) < 2:
-            return True
+        # if len(self.doc_dict) < 2:
+        #     return True
 
         table_name = self.doc_dict[doc_dict_index]['table_name']
 
@@ -474,7 +505,8 @@ class AnalyzeTable(object):
             table_row = table_data[n]
             self.merge_table_cols(table_row)
             row_val_result, row_inner = self._get_col_val(table_row)
-            if row_inner and self.row_name_is_paragraph(row_inner, table_row, table_data, n, tmp_index):  # (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
+            if row_inner and self.row_name_is_paragraph(row_inner, table_row, table_data, n,
+                                                        tmp_index):  # (self.check_is_title(row_inner, table_row) or self.col_is_pgh(table_row, row_inner, table_data, n)):
                 pos = table_row[0]['pos']
                 if len(result_row):
                     if not len(doc_dict):
@@ -743,7 +775,8 @@ class AnalyzeTable(object):
                 try:
                     _bool = bool(row[col]['text'] == col_val)
                     if col_len - 1 > col > 0:
-                        if row[col + 1]['text'] == row[col]['text'] or row[col - 1]['text'] == row[col]['text']:  # 强迫被拆分的列
+                        if row[col + 1]['text'] == row[col]['text'] or row[col - 1]['text'] == row[col][
+                            'text']:  # 强迫被拆分的列
                             _bool = True
                     col_list.append(_bool)
                     col_val = row[col]['text']
@@ -839,14 +872,6 @@ class ProcessTable(AnalyzeTable):
         if self.is_table:
             return False
 
-        if index < 4:
-            if self.save_first_child_text(item):
-                return True
-
-        if item.name == 'div' and self.first_child is False:  # 页眉不读
-            self.first_child = True
-            return True
-
         if self.exclude_elem(item, index, _class):
             return True
 
@@ -861,8 +886,8 @@ class ProcessTable(AnalyzeTable):
        @param elem：当前元素
        """
 
-        if self.is_exclude_sentence(index, elem, _class):
-            return False
+        # if self.is_exclude_sentence(index, elem, _class):
+        #     return False
 
         class_name, elem_type = self.get_elem_type(_class)
         if class_name and elem_type:
@@ -938,7 +963,8 @@ class ProcessTable(AnalyzeTable):
                     return False
 
                 prev_style_dict = prev_dict['style_dict']
-                fs, x, h, y, prev_text = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], prev_style_dict['y'], prev_dict['text']
+                fs, x, h, y, prev_text = prev_style_dict['fs'], prev_style_dict['x'], prev_style_dict['h'], \
+                                         prev_style_dict['y'], prev_dict['text']
 
                 if info:
                     if not self.sentence_end_is_date(prev_dict, text):
